@@ -1,0 +1,437 @@
+#!/bin/bash
+# ─────────────────────────────────────────────────
+# winvx-setup — WinVX 快捷键配置工具
+# 自动检测桌面环境, 检查快捷键冲突, 绑定快捷键
+#
+# 用法:
+#   winvx-setup              # 交互模式
+#   winvx-setup --auto       # 自动选择第一个可用快捷键
+#   winvx-setup --remove     # 移除已绑定的 WinVX 快捷键
+# ─────────────────────────────────────────────────
+
+set -e
+
+WINVX_CMD="python3 /opt/winvx/main.py --toggle"
+WINVX_NAME="WinVX Clipboard"
+
+# 候选快捷键 (优先级排列)
+CANDIDATES=("Super+V" "Super+B" "Super+G" "Super+H" "Super+J" "Super+K")
+# gsettings 格式映射
+declare -A GS_MAP=(
+    ["Super+V"]="<Super>v"
+    ["Super+B"]="<Super>b"
+    ["Super+G"]="<Super>g"
+    ["Super+H"]="<Super>h"
+    ["Super+J"]="<Super>j"
+    ["Super+K"]="<Super>k"
+)
+
+# ── 颜色输出 ────────────────────────────────────
+
+GREEN="\033[32m"
+YELLOW="\033[33m"
+RED="\033[31m"
+CYAN="\033[36m"
+BOLD="\033[1m"
+RESET="\033[0m"
+
+info()  { echo -e "${GREEN}✓${RESET} $1"; }
+warn()  { echo -e "${YELLOW}⚠${RESET} $1"; }
+error() { echo -e "${RED}✗${RESET} $1"; }
+title() { echo -e "\n${BOLD}${CYAN}$1${RESET}"; }
+
+# ── 桌面环境检测 ─────────────────────────────────
+
+detect_desktop() {
+    local desktop="${XDG_CURRENT_DESKTOP:-}"
+    desktop=$(echo "$desktop" | tr '[:upper:]' '[:lower:]')
+
+    if echo "$desktop" | grep -qE "gnome|ubuntu|unity|pop"; then
+        echo "gnome"
+    elif echo "$desktop" | grep -qE "kde|plasma"; then
+        echo "kde"
+    elif echo "$desktop" | grep -qE "xfce"; then
+        echo "xfce"
+    elif echo "$desktop" | grep -qE "cinnamon"; then
+        echo "cinnamon"
+    elif echo "$desktop" | grep -qE "mate"; then
+        echo "mate"
+    elif echo "$desktop" | grep -qE "budgie"; then
+        echo "budgie"
+    else
+        echo "unknown"
+    fi
+}
+
+desktop_display_name() {
+    case "$1" in
+        gnome)    echo "GNOME" ;;
+        kde)      echo "KDE Plasma" ;;
+        xfce)     echo "XFCE" ;;
+        cinnamon) echo "Cinnamon" ;;
+        mate)     echo "MATE" ;;
+        budgie)   echo "Budgie" ;;
+        *)        echo "未知 ($XDG_CURRENT_DESKTOP)" ;;
+    esac
+}
+
+# ── GNOME 快捷键检测 ─────────────────────────────
+
+gnome_is_key_used() {
+    # $1 = gsettings 格式, 如 "<Super>v"
+    local target="$1"
+
+    # 1. 检查内置快捷键 (media-keys 等)
+    local schemas=(
+        "org.gnome.settings-daemon.plugins.media-keys"
+        "org.gnome.desktop.wm.keybindings"
+        "org.gnome.shell.keybindings"
+        "org.gnome.mutter.keybindings"
+    )
+
+    for schema in "${schemas[@]}"; do
+        # 列出该 schema 下所有 key
+        local keys
+        keys=$(gsettings list-keys "$schema" 2>/dev/null) || continue
+        while IFS= read -r key; do
+            local val
+            val=$(gsettings get "$schema" "$key" 2>/dev/null) || continue
+            # 忽略空值
+            [[ "$val" == "@as []" || "$val" == "''" || "$val" == "['']" ]] && continue
+            # 检查是否包含目标快捷键 (不区分大小写)
+            if echo "$val" | grep -qi "$(echo "$target" | sed 's/[<>]/./g')"; then
+                echo "$schema $key"
+                return 0
+            fi
+        done <<< "$keys"
+    done
+
+    # 2. 检查自定义快捷键
+    local custom_list
+    custom_list=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings 2>/dev/null) || return 1
+    # 解析路径列表
+    local paths
+    paths=$(echo "$custom_list" | grep -oP "'/[^']+'" | tr -d "'" 2>/dev/null) || return 1
+    while IFS= read -r path; do
+        [[ -z "$path" ]] && continue
+        local binding
+        binding=$(gsettings get "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:${path}" binding 2>/dev/null) || continue
+        if echo "$binding" | grep -qi "$(echo "$target" | sed 's/[<>]/./g')"; then
+            local name
+            name=$(gsettings get "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:${path}" name 2>/dev/null)
+            # 如果是 WinVX 自己注册的, 不算冲突
+            if echo "$name" | grep -qi "winvx"; then
+                return 1
+            fi
+            echo "自定义快捷键 $name"
+            return 0
+        fi
+    done <<< "$paths"
+
+    return 1
+}
+
+gnome_bind_key() {
+    # $1 = gsettings 格式
+    local binding="$1"
+    local base="org.gnome.settings-daemon.plugins.media-keys"
+    local path="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/winvx/"
+    local schema="org.gnome.settings-daemon.plugins.media-keys.custom-keybinding"
+
+    # 读取已有列表
+    local existing
+    existing=$(gsettings get "$base" custom-keybindings 2>/dev/null) || existing="@as []"
+
+    # 添加路径 (如果不存在)
+    if ! echo "$existing" | grep -q "winvx"; then
+        if [[ "$existing" == "@as []" || "$existing" == "[]" ]]; then
+            local new_list="['${path}']"
+        else
+            local new_list="${existing%]}, '${path}']"
+        fi
+        gsettings set "$base" custom-keybindings "$new_list"
+    fi
+
+    # 设置快捷键属性
+    gsettings set "${schema}:${path}" name "$WINVX_NAME"
+    gsettings set "${schema}:${path}" command "$WINVX_CMD"
+    gsettings set "${schema}:${path}" binding "$binding"
+}
+
+gnome_remove_key() {
+    local base="org.gnome.settings-daemon.plugins.media-keys"
+    local path="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/winvx/"
+
+    local existing
+    existing=$(gsettings get "$base" custom-keybindings 2>/dev/null) || return 0
+
+    if echo "$existing" | grep -q "winvx"; then
+        local new_list
+        new_list=$(echo "$existing" \
+            | sed "s|, *'${path}'||g" \
+            | sed "s|'${path}', *||g" \
+            | sed "s|'${path}'||g")
+        gsettings set "$base" custom-keybindings "$new_list" 2>/dev/null || true
+        # 清除快捷键属性
+        gsettings reset "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:${path}" name 2>/dev/null || true
+        gsettings reset "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:${path}" command 2>/dev/null || true
+        gsettings reset "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:${path}" binding 2>/dev/null || true
+    fi
+}
+
+# ── KDE 快捷键检测 ────────────────────────────────
+
+kde_is_key_used() {
+    local target="$1"  # 如 "Super+V" → "Meta+V"
+    local kde_key="${target//Super/Meta}"
+    local rc="$HOME/.config/kglobalshortcutsrc"
+    [[ -f "$rc" ]] || return 1
+
+    if grep -qi "$kde_key" "$rc" 2>/dev/null; then
+        local match
+        match=$(grep -i "$kde_key" "$rc" | head -1)
+        echo "KDE 快捷键: $match"
+        return 0
+    fi
+    return 1
+}
+
+kde_bind_key() {
+    local target="$1"
+    local kde_key="${target//Super/Meta}"
+    kwriteconfig5 --file kglobalshortcutsrc \
+        --group "winvx.desktop" \
+        --key "_launch" "${WINVX_CMD},none,${WINVX_NAME}"
+    # 刷新
+    dbus-send --type=signal --dest=org.kde.KGlobalAccel \
+        /component/winvx org.kde.kglobalaccel.Component.changed 2>/dev/null || true
+}
+
+kde_remove_key() {
+    kwriteconfig5 --file kglobalshortcutsrc \
+        --group "winvx.desktop" --key "_launch" --delete 2>/dev/null || true
+}
+
+# ── XFCE 快捷键检测 ──────────────────────────────
+
+xfce_is_key_used() {
+    local target="$1"  # "Super+V" → "<Super>v"
+    local xfce_key="${GS_MAP[$target]}"
+    if command -v xfconf-query &>/dev/null; then
+        local bindings
+        bindings=$(xfconf-query -c xfce4-keyboard-shortcuts -l -v 2>/dev/null) || return 1
+        if echo "$bindings" | grep -qi "$xfce_key"; then
+            echo "XFCE 快捷键"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+xfce_bind_key() {
+    local xfce_key="${GS_MAP[$1]}"
+    xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/${xfce_key}" \
+        -n -t string -s "$WINVX_CMD" 2>/dev/null || true
+}
+
+xfce_remove_key() {
+    local xfce_key="${GS_MAP[$1]}"
+    xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/${xfce_key}" \
+        -r 2>/dev/null || true
+}
+
+# ── 通用: Cinnamon / MATE / Budgie (基于 gsettings) ──
+
+generic_bind_key() {
+    gnome_bind_key "$1"
+}
+
+generic_is_key_used() {
+    gnome_is_key_used "$1"
+}
+
+generic_remove_key() {
+    gnome_remove_key
+}
+
+# ── 核心逻辑 ──────────────────────────────────────
+
+check_key() {
+    # 检查候选键是否被占用, 返回 0=被占用, 1=可用
+    local key="$1"
+    local gs_key="${GS_MAP[$key]}"
+
+    case "$DESKTOP" in
+        gnome|budgie|cinnamon|mate)
+            gnome_is_key_used "$gs_key" && return 0
+            ;;
+        kde)
+            kde_is_key_used "$key" && return 0
+            ;;
+        xfce)
+            xfce_is_key_used "$key" && return 0
+            ;;
+    esac
+    return 1
+}
+
+bind_key() {
+    local key="$1"
+    local gs_key="${GS_MAP[$key]}"
+
+    case "$DESKTOP" in
+        gnome|budgie|cinnamon|mate)
+            gnome_bind_key "$gs_key"
+            ;;
+        kde)
+            kde_bind_key "$key"
+            ;;
+        xfce)
+            xfce_bind_key "$key"
+            ;;
+        *)
+            error "不支持的桌面环境自动绑定"
+            echo ""
+            echo "请手动设置快捷键:"
+            echo "  命令: $WINVX_CMD"
+            echo "  快捷键: $key"
+            return 1
+            ;;
+    esac
+}
+
+remove_key() {
+    case "$DESKTOP" in
+        gnome|budgie|cinnamon|mate) gnome_remove_key ;;
+        kde)   kde_remove_key ;;
+        xfce)  xfce_remove_key "$1" ;;
+    esac
+}
+
+# ── 主流程 ────────────────────────────────────────
+
+do_setup() {
+    local auto_mode="$1"
+
+    title "WinVX 快捷键配置"
+
+    # 1. 检测桌面环境
+    DESKTOP=$(detect_desktop)
+    local display_name
+    display_name=$(desktop_display_name "$DESKTOP")
+    info "桌面环境: ${BOLD}${display_name}${RESET}"
+
+    # 2. 检查依赖
+    if [[ "$DESKTOP" == "gnome" || "$DESKTOP" == "budgie" || "$DESKTOP" == "cinnamon" || "$DESKTOP" == "mate" ]]; then
+        if ! command -v gsettings &>/dev/null; then
+            error "gsettings 不可用"
+            return 1
+        fi
+    fi
+
+    # 3. 检查候选快捷键
+    title "检查快捷键可用性"
+
+    local available=()
+    local occupied=()
+
+    for key in "${CANDIDATES[@]}"; do
+        local conflict
+        if conflict=$(check_key "$key" 2>/dev/null); then
+            occupied+=("$key")
+            warn "${key} — 已被占用 ($conflict)"
+        else
+            available+=("$key")
+            info "${key} — 可用"
+        fi
+    done
+
+    if [[ ${#available[@]} -eq 0 ]]; then
+        error "所有候选快捷键都被占用！"
+        echo ""
+        echo "请手动在系统设置中添加自定义快捷键:"
+        echo "  命令: $WINVX_CMD"
+        return 1
+    fi
+
+    # 4. 选择快捷键
+    local chosen=""
+
+    if [[ "${available[0]}" == "Super+V" ]]; then
+        # Super+V 可用, 直接使用
+        chosen="Super+V"
+        info "使用默认快捷键: ${BOLD}${chosen}${RESET}"
+    elif [[ "$auto_mode" == "true" ]]; then
+        # 自动模式: 选第一个可用的
+        chosen="${available[0]}"
+        warn "Super+V 被占用, 自动选择: ${BOLD}${chosen}${RESET}"
+    else
+        # 交互模式: 让用户选择
+        echo ""
+        title "请选择快捷键"
+        local i=1
+        for key in "${available[@]}"; do
+            echo "  ${CYAN}${i})${RESET} ${key}"
+            ((i++))
+        done
+        echo ""
+        read -r -p "请输入编号 [1]: " choice
+        choice=${choice:-1}
+
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#available[@]} )); then
+            chosen="${available[$((choice-1))]}"
+        else
+            chosen="${available[0]}"
+        fi
+    fi
+
+    # 5. 绑定快捷键
+    title "绑定快捷键"
+
+    # 先移除旧的 WinVX 绑定
+    remove_key "$chosen" 2>/dev/null || true
+
+    if bind_key "$chosen"; then
+        info "已绑定: ${BOLD}${chosen}${RESET} → WinVX"
+    else
+        return 1
+    fi
+
+    echo ""
+    echo -e "${GREEN}${BOLD}✅ 配置完成!${RESET}"
+    echo ""
+    echo "  按 ${BOLD}${chosen}${RESET} 打开剪贴板历史"
+    echo "  启动命令: winvx"
+    echo "  重新配置: winvx-setup"
+    echo ""
+}
+
+do_remove() {
+    title "移除 WinVX 快捷键"
+    DESKTOP=$(detect_desktop)
+    remove_key "Super+V"
+    info "已移除 WinVX 快捷键绑定"
+}
+
+# ── 入口 ──────────────────────────────────────────
+
+case "${1:-}" in
+    --auto)
+        do_setup "true"
+        ;;
+    --remove)
+        do_remove
+        ;;
+    --help|-h)
+        echo "用法: winvx-setup [选项]"
+        echo ""
+        echo "选项:"
+        echo "  (无)       交互模式, 让用户选择快捷键"
+        echo "  --auto     自动选择第一个可用快捷键"
+        echo "  --remove   移除 WinVX 快捷键绑定"
+        echo "  --help     显示帮助"
+        ;;
+    *)
+        do_setup "false"
+        ;;
+esac

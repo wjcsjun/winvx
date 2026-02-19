@@ -1,0 +1,32 @@
+name: Build Deb Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Make scripts executable
+        run: chmod +x build_deb.sh winvx-setup install.sh
+
+      - name: Build .deb
+        run: ./build_deb.sh
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: winvx-deb
+          path: winvx_*.deb
+          if-no-files-found: error

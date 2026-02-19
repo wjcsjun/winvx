@@ -1,5 +1,2 @@
 __pycache__/
 *.deb
-winvx-setup
-build_deb.sh
-install.sh
