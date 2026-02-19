@@ -1,8 +1,7 @@
 [Desktop Entry]
 Name=WinVX Clipboard
 Comment=Windows 11 style clipboard manager (Win+V)
-Comment[zh_CN]=Windows 11 风格剪贴板管理器
-Exec=python3 /home/jin/winvx2/main.py
+Exec=winvx
 Icon=edit-paste
 Terminal=false
 Type=Application

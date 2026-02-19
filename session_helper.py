@@ -1,6 +1,6 @@
 """
-session_helper.py — 会话类型检测
-检测当前运行在 X11 还是 Wayland 会话
+session_helper.py — Session Type Detection
+Detect whether running in X11 or Wayland session
 """
 
 import os
@@ -8,11 +8,11 @@ import shutil
 
 
 def get_session_type() -> str:
-    """返回当前会话类型: 'wayland' / 'x11' / 'unknown'"""
+    """Returns current session type: 'wayland' / 'x11' / 'unknown'"""
     session = os.environ.get("XDG_SESSION_TYPE", "").lower()
     if session in ("wayland", "x11"):
         return session
-    # 备用检测
+    # Fallback detection
     if os.environ.get("WAYLAND_DISPLAY"):
         return "wayland"
     if os.environ.get("DISPLAY"):
@@ -29,10 +29,10 @@ def is_x11() -> bool:
 
 
 def has_ydotool() -> bool:
-    """检查 ydotool 是否可用 (Wayland 下模拟按键)"""
+    """Check if ydotool is available (simulating key presses under Wayland)"""
     return shutil.which("ydotool") is not None
 
 
 def has_wl_paste() -> bool:
-    """检查 wl-paste 是否可用"""
+    """Check if wl-paste is available"""
     return shutil.which("wl-paste") is not None

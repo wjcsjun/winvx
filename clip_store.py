@@ -1,6 +1,6 @@
 """
-clip_store.py — ClipEntry 数据模型与 JSON 持久化
-WinVX: Windows 11 Win+V 风格剪贴板管理器
+clip_store.py — ClipEntry data model and JSON persistence
+WinVX: Windows 11 Win+V style clipboard manager
 """
 
 import json
@@ -13,7 +13,7 @@ from typing import Optional
 from pathlib import Path
 
 
-# ── 数据目录 ──────────────────────────────────────────────────
+# ── Data Directory ──────────────────────────────────────────
 
 DATA_DIR = Path(os.environ.get(
     "WINVX_DATA_DIR",
@@ -22,19 +22,19 @@ DATA_DIR = Path(os.environ.get(
 HISTORY_FILE = DATA_DIR / "history.json"
 IMAGES_DIR = DATA_DIR / "images"
 
-MAX_ITEMS = 25          # 非置顶条目上限 (与 Win11 一致)
-MAX_CONTENT_LEN = 4096  # 文本内容最大字符数
+MAX_ITEMS = 25          # Limit for non-pinned items (consistent with Win11)
+MAX_CONTENT_LEN = 4096  # Max character count for text content
 
 
-# ── ClipEntry 数据类 ──────────────────────────────────────────
+# ── ClipEntry Dataclass ───────────────────────────────────────
 
 @dataclass
 class ClipEntry:
-    """一条剪贴板历史记录"""
+    """A single clipboard history record"""
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     content_type: str = "text"          # text | image | html
-    content: str = ""                   # 文本内容 / 图片文件名
-    preview: str = ""                   # 预览文本 (截断)
+    content: str = ""                   # Text content / Image filename
+    preview: str = ""                   # Preview text (truncated)
     timestamp: float = field(default_factory=time.time)
     pinned: bool = False
 
@@ -46,10 +46,10 @@ class ClipEntry:
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
-# ── ClipStore 存储管理 ────────────────────────────────────────
+# ── ClipStore Management ───────────────────────────────────────
 
 class ClipStore:
-    """管理剪贴板历史的增删改查与持久化"""
+    """Manage CRUD operations and persistence of clipboard history"""
 
     def __init__(self, max_items: int = MAX_ITEMS):
         self.max_items = max_items
@@ -57,11 +57,11 @@ class ClipStore:
         self._ensure_dirs()
         self._load()
 
-    # ── 公共 API ──────────────────────────────────────────────
+    # ── Public API ────────────────────────────────────────────────
 
     @property
     def entries(self) -> list[ClipEntry]:
-        """返回所有条目 (置顶在前, 按时间倒序)"""
+        """Return all entries (pinned first, reverse chronological order)"""
         pinned = [e for e in self._entries if e.pinned]
         normal = [e for e in self._entries if not e.pinned]
         pinned.sort(key=lambda e: e.timestamp, reverse=True)
@@ -69,11 +69,11 @@ class ClipStore:
         return pinned + normal
 
     def add(self, content_type: str, content: str, preview: str = "") -> Optional[ClipEntry]:
-        """添加新条目, 自动去重和数量限制. 返回新条目或 None."""
+        """Add new entry, auto-deduplicate and limit. Returns new entry or None."""
         if not content or not content.strip():
             return None
 
-        # 去重: 如果内容已存在, 移到顶部 (更新时间戳)
+        # Deduplication: if content exists, move to top (update timestamp)
         for existing in self._entries:
             if existing.content_type == content_type and existing.content == content:
                 existing.timestamp = time.time()
@@ -92,7 +92,7 @@ class ClipStore:
         return entry
 
     def add_image(self, image_bytes: bytes, fmt: str = "png") -> Optional[ClipEntry]:
-        """保存图片到磁盘并添加条目"""
+        """Save image to disk and add entry"""
         if not image_bytes:
             return None
         filename = f"{uuid.uuid4().hex[:12]}.{fmt}"
@@ -102,7 +102,7 @@ class ClipStore:
         entry = ClipEntry(
             content_type="image",
             content=filename,
-            preview=f"[图片 {len(image_bytes)//1024}KB]",
+            preview=f"[Image {len(image_bytes)//1024}KB]",
             timestamp=time.time(),
         )
         self._entries.append(entry)
@@ -111,11 +111,11 @@ class ClipStore:
         return entry
 
     def delete(self, entry_id: str) -> bool:
-        """按 id 删除条目"""
+        """Delete entry by id"""
         for i, e in enumerate(self._entries):
             if e.id == entry_id:
                 removed = self._entries.pop(i)
-                # 清理图片文件
+                # Clean up image file
                 if removed.content_type == "image":
                     img_path = IMAGES_DIR / removed.content
                     if img_path.exists():
@@ -125,7 +125,7 @@ class ClipStore:
         return False
 
     def toggle_pin(self, entry_id: str) -> bool:
-        """切换置顶状态"""
+        """Toggle pinned status"""
         for e in self._entries:
             if e.id == entry_id:
                 e.pinned = not e.pinned
@@ -134,7 +134,7 @@ class ClipStore:
         return False
 
     def clear(self, keep_pinned: bool = True):
-        """清空历史 (默认保留置顶项)"""
+        """Clear history (keep pinned items by default)"""
         if keep_pinned:
             removed = [e for e in self._entries if not e.pinned]
             self._entries = [e for e in self._entries if e.pinned]
@@ -151,7 +151,7 @@ class ClipStore:
         self._save()
 
     def search(self, query: str) -> list[ClipEntry]:
-        """搜索条目 (模糊匹配)"""
+        """Search entries (fuzzy match)"""
         if not query:
             return self.entries
         q = query.lower()
@@ -159,26 +159,26 @@ class ClipStore:
         return results
 
     def get_image_path(self, entry: ClipEntry) -> Optional[Path]:
-        """获取图片条目的完整路径"""
+        """Get full path for image entry"""
         if entry.content_type != "image":
             return None
         path = IMAGES_DIR / entry.content
         return path if path.exists() else None
 
-    # ── 内部方法 ──────────────────────────────────────────────
+    # ── Internal Methods ──────────────────────────────────────────
 
     def _make_preview(self, content_type: str, content: str) -> str:
         if content_type == "image":
-            return "[图片]"
-        # 文本预览: 第一行, 截断到 80 字符
+            return "[Image]"
+        # Text preview: first line, truncated to 80 chars
         line = content.split("\n")[0].strip()
         return line[:80] + ("…" if len(line) > 80 else "")
 
     def _enforce_limit(self):
-        """限制非置顶条目数量"""
+        """Limit non-pinned entries"""
         normal = [e for e in self._entries if not e.pinned]
         if len(normal) > self.max_items:
-            # 按时间升序排, 删除最旧的
+            # Sort by time ascending, delete oldest
             normal.sort(key=lambda e: e.timestamp)
             to_remove = normal[:len(normal) - self.max_items]
             for e in to_remove:
@@ -209,4 +209,4 @@ class ClipStore:
                 json.dump([e.to_dict() for e in self._entries], f,
                           ensure_ascii=False, indent=2)
         except OSError as e:
-            print(f"[WinVX] 保存历史失败: {e}")
+            print(f"[WinVX] Failed to save history: {e}")

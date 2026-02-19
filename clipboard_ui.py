@@ -1,6 +1,6 @@
 """
-clipboard_ui.py — Windows 11 风格剪贴板弹窗 UI
-深色毛玻璃主题, 搜索过滤, 键盘导航, 点击即粘贴
+clipboard_ui.py — Windows 11 style clipboard popup UI
+Dark glassmorphism theme, search filtering, keyboard navigation, click to paste
 """
 
 import gi
@@ -16,20 +16,20 @@ from typing import Optional, Callable
 from clip_store import ClipStore, ClipEntry, IMAGES_DIR
 
 
-# ── CSS 样式 (Win11 深色主题) ─────────────────────────────────
+# ── CSS Styles (Win11 Dark Theme) ───────────────────────────
 
 CSS = """
-/* ── 全局 ── */
+/* ── Global ── */
 * {
     font-family: "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", sans-serif;
 }
 
-/* ── 主窗口 (背景由 draw 信号手动绘制) ── */
+/* ── Main Window (Background manually drawn by draw signal) ── */
 #winvx-window {
     background-color: transparent;
 }
 
-/* ── 标题栏 ── */
+/* ── Header ── */
 #winvx-header {
     background: transparent;
     padding: 14px 18px 6px 18px;
@@ -41,7 +41,7 @@ CSS = """
     letter-spacing: 0.3px;
 }
 
-/* ── 搜索栏 ── */
+/* ── Search Bar ── */
 #winvx-search {
     background-color: #3a3a3a;
     border: 1px solid #4a4a4a;
@@ -57,7 +57,7 @@ CSS = """
     background-color: #404040;
 }
 
-/* ── 列表滚动区 ── */
+/* ── List Scroll Area ── */
 #winvx-scroll {
     background: transparent;
     min-height: 100px;
@@ -72,13 +72,13 @@ CSS = """
     min-width: 6px;
 }
 
-/* ── 列表容器 ── */
+/* ── List Container ── */
 #winvx-list {
     background: transparent;
     padding: 2px 8px;
 }
 
-/* ── 单条记录 ── */
+/* ── Single Record ── */
 .clip-item {
     background-color: #2d2d2d;
     border: 1px solid #3e3e3e;
@@ -98,7 +98,7 @@ CSS = """
     border-left: 3px solid #60cdff;
 }
 
-/* ── 条目内容 ── */
+/* ── Item Content ── */
 .clip-preview {
     color: #e8e8e8;
     font-size: 13px;
@@ -109,7 +109,7 @@ CSS = """
     margin-top: 4px;
 }
 
-/* ── 操作按钮 ── */
+/* ── Action Buttons ── */
 .clip-action-btn {
     background: transparent;
     border: none;
@@ -128,7 +128,7 @@ CSS = """
     color: #60cdff;
 }
 
-/* ── 底部工具栏 ── */
+/* ── Footer Toolbar ── */
 #winvx-footer {
     background: transparent;
     padding: 6px 16px 12px 16px;
@@ -148,14 +148,14 @@ CSS = """
     border-color: #60cdff;
 }
 
-/* ── 空状态 ── */
+/* ── Empty State ── */
 .empty-label {
     color: #777777;
     font-size: 14px;
     padding: 40px 20px;
 }
 
-/* ── 图片缩略图 ── */
+/* ── Image Thumbnails ── */
 .clip-image-preview {
     border-radius: 6px;
     margin-top: 6px;
@@ -164,7 +164,7 @@ CSS = """
 
 
 class ClipboardPopup(Gtk.Window):
-    """Win11 风格剪贴板弹窗"""
+    """Win11 style clipboard popup"""
 
     WINDOW_WIDTH = 380
     WINDOW_HEIGHT = 520
@@ -176,39 +176,39 @@ class ClipboardPopup(Gtk.Window):
         self.on_paste = on_paste
         self._selected_index = -1
         self._visible_entries: list[ClipEntry] = []
-        self._pasting = False  # 粘贴中标志, 避免 focus-out 干扰
+        self._pasting = False  # Pasting flag to avoid focus-out interference
         self._wayland = wayland
 
         self._setup_window()
         self._apply_css()
         self._build_ui()
 
-    # ── 窗口设置 ──────────────────────────────────────────────
+    # ── Window Settings ──────────────────────────────────────────
 
     def _setup_window(self):
         self.set_name("winvx-window")
         self.set_title("WinVX Clipboard")
         self.set_default_size(self.WINDOW_WIDTH, self.WINDOW_HEIGHT)
         self.set_resizable(False)
-        self.set_decorated(False)         # 无边框
+        self.set_decorated(False)         # No border
         self.set_skip_taskbar_hint(True)
         self.set_skip_pager_hint(True)
         self.set_keep_above(True)
-        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)  # DIALOG 可以获得键盘焦点
+        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)  # DIALOG can obtain keyboard focus
         self.set_accept_focus(True)
         self.set_can_focus(True)
 
-        # 支持 RGBA 透明 (用于圆角外部透明区域)
+        # Support RGBA transparency (for rounded corners external transparency)
         screen = self.get_screen()
         visual = screen.get_rgba_visual()
         if visual:
             self.set_visual(visual)
         self.set_app_paintable(True)
 
-        # 手动绘制窗口背景 (圆角深色 + 边框)
+        # Manually draw window background (rounded dark corners + border)
         self.connect("draw", self._on_draw)
 
-        # 失焦自动隐藏
+        # Auto-hide on focus-out
         self.connect("focus-out-event", self._on_focus_out)
         self.connect("key-press-event", self._on_key_press)
         self.connect("delete-event", lambda w, e: self.hide() or True)
@@ -223,62 +223,62 @@ class ClipboardPopup(Gtk.Window):
         )
 
     def _on_draw(self, widget, cr):
-        """手动绘制窗口背景: 深色圆角矩形 + 微妙边框"""
+        """Manually draw window background: dark rounded rectangle + subtle border"""
         w = widget.get_allocated_width()
         h = widget.get_allocated_height()
-        r = 12  # 圆角半径
+        r = 12  # Corner radius
 
-        # 先清空 (完全透明)
+        # Clear first (full transparency)
         cr.set_operator(cairo.OPERATOR_SOURCE)
         cr.set_source_rgba(0, 0, 0, 0)
         cr.paint()
 
-        # 绘制圆角矩形路径
+        # Draw rounded rectangle path
         cr.new_path()
-        cr.arc(r, r, r, math.pi, 1.5 * math.pi)           # 左上
-        cr.arc(w - r, r, r, 1.5 * math.pi, 2 * math.pi)   # 右上
-        cr.arc(w - r, h - r, r, 0, 0.5 * math.pi)         # 右下
-        cr.arc(r, h - r, r, 0.5 * math.pi, math.pi)       # 左下
+        cr.arc(r, r, r, math.pi, 1.5 * math.pi)           # Top left
+        cr.arc(w - r, r, r, 1.5 * math.pi, 2 * math.pi)   # Top right
+        cr.arc(w - r, h - r, r, 0, 0.5 * math.pi)         # Bottom right
+        cr.arc(r, h - r, r, 0.5 * math.pi, math.pi)       # Bottom left
         cr.close_path()
 
-        # 填充深色背景 (近乎不透明)
-        cr.set_source_rgba(0.13, 0.13, 0.13, 0.97)  # #212121, 97% 不透明
+        # Fill dark background (nearly opaque)
+        cr.set_source_rgba(0.13, 0.13, 0.13, 0.97)  # #212121, 97% opaque
         cr.fill_preserve()
 
-        # 绘制边框
-        cr.set_source_rgba(0.3, 0.3, 0.3, 0.6)  # 微妙灰色边框
+        # Draw border
+        cr.set_source_rgba(0.3, 0.3, 0.3, 0.6)  # Subtle gray border
         cr.set_line_width(1)
         cr.stroke()
 
-        # 切换回 OVER 模式, 让子控件正常绘制
+        # Switch back to OVER mode to let child widgets draw normally
         cr.set_operator(cairo.OPERATOR_OVER)
-        return False  # 继续传播, 让子控件绘制
+        return False  # Continue propagation to let child widgets draw
 
-    # ── 构建 UI ──────────────────────────────────────────────
+    # ── Build UI ──────────────────────────────────────────────────
 
     def _build_ui(self):
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add(main_box)
 
-        # ── 标题 ──
+        # ── Title ──
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         header.set_name("winvx-header")
-        title = Gtk.Label(label="📋  剪贴板历史")
+        title = Gtk.Label(label="📋  Clipboard History")
         title.set_name("winvx-title")
         title.set_halign(Gtk.Align.START)
         header.pack_start(title, True, True, 0)
         main_box.pack_start(header, False, False, 0)
 
-        # ── 搜索栏 ──
+        # ── Search Bar ──
         self.search_entry = Gtk.Entry()
         self.search_entry.set_name("winvx-search")
-        self.search_entry.set_placeholder_text("搜索剪贴板内容…")
+        self.search_entry.set_placeholder_text("Search clipboard content...")
         self.search_entry.connect("changed", self._on_search_changed)
-        # 在搜索框上拦截 Up/Down/Enter/Esc, 防止被输入框吞掉
+        # Intercept Up/Down/Enter/Esc on search box to prevent them from being swallowed by input box
         self.search_entry.connect("key-press-event", self._on_key_press)
         main_box.pack_start(self.search_entry, False, False, 0)
 
-        # ── 滚动列表 ──
+        # ── Scroll List ──
         scroll = Gtk.ScrolledWindow()
         scroll.set_name("winvx-scroll")
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -289,11 +289,11 @@ class ClipboardPopup(Gtk.Window):
         scroll.add(self.list_box)
         main_box.pack_start(scroll, True, True, 0)
 
-        # ── 底部工具栏 ──
+        # ── Footer Toolbar ──
         footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         footer.set_name("winvx-footer")
 
-        clear_btn = Gtk.Button(label="🗑  全部清除")
+        clear_btn = Gtk.Button(label="🗑  Clear All")
         clear_btn.get_style_context().add_class("footer-btn")
         clear_btn.connect("clicked", self._on_clear_all)
         footer.pack_end(clear_btn, False, False, 0)
@@ -307,9 +307,9 @@ class ClipboardPopup(Gtk.Window):
         main_box.pack_start(footer, False, False, 0)
 
         self.show_all()
-        self.hide()  # 默认隐藏
+        self.hide()  # Hidden by default
 
-    # ── 显示/隐藏 ─────────────────────────────────────────────
+    # ── Show/Hide ─────────────────────────────────────────────────
 
     def toggle(self):
         if self.get_visible():
@@ -318,12 +318,12 @@ class ClipboardPopup(Gtk.Window):
             self.popup()
 
     def popup(self):
-        """弹出窗口, 跟随鼠标位置"""
+        """Show window, follow mouse position"""
         self._refresh_list()
         self.search_entry.set_text("")
         self._selected_index = -1
 
-        # 获取鼠标位置并定位弹窗
+        # Get mouse position and position popup
         display = Gdk.Display.get_default()
         seat = display.get_default_seat()
         pointer = seat.get_pointer()
@@ -332,7 +332,7 @@ class ClipboardPopup(Gtk.Window):
         monitor = display.get_primary_monitor() or display.get_monitor(0)
         geom = monitor.get_geometry()
 
-        # 弹窗略低于鼠标位置, 水平居中于鼠标
+        # Popup slightly below mouse position, horizontally centered to mouse
         x = max(geom.x, min(mx - self.WINDOW_WIDTH // 2,
                             geom.x + geom.width - self.WINDOW_WIDTH))
         y = max(geom.y, min(my + 20,
@@ -341,18 +341,18 @@ class ClipboardPopup(Gtk.Window):
 
         self.show_all()
 
-        # 强制抢夺焦点 (多种方式确保成功)
+        # Forcefully grab focus (multiple ways to ensure success)
         self.present_with_time(Gdk.CURRENT_TIME)
         if self.get_window():
             self.get_window().focus(Gdk.CURRENT_TIME)
         self.search_entry.grab_focus()
 
-        # 延迟再次抢焦点 (有些 WM 需要等一帧)
+        # Delay again to grab focus (some WMs need a frame)
         GLib.timeout_add(50, self._force_focus)
         GLib.timeout_add(150, self._force_focus)
 
     def _force_focus(self):
-        """强制抢焦点 (兜底)"""
+        """Force grab focus (fallback)"""
         if self.get_visible():
             try:
                 self.present_with_time(Gdk.CURRENT_TIME)
@@ -364,11 +364,11 @@ class ClipboardPopup(Gtk.Window):
                 pass
         return False
 
-    # ── 列表刷新 ──────────────────────────────────────────────
+    # ── List Refresh ──────────────────────────────────────────────
 
     def _refresh_list(self, query: str = ""):
-        """重新渲染条目列表"""
-        # 清空
+        """Re-render item list"""
+        # Clear
         for child in self.list_box.get_children():
             self.list_box.remove(child)
 
@@ -380,7 +380,7 @@ class ClipboardPopup(Gtk.Window):
         self._visible_entries = entries
 
         if not entries:
-            empty = Gtk.Label(label="暂无剪贴板记录")
+            empty = Gtk.Label(label="No clipboard records yet")
             empty.get_style_context().add_class("empty-label")
             self.list_box.pack_start(empty, True, True, 0)
             self.count_label.set_text("")
@@ -389,13 +389,13 @@ class ClipboardPopup(Gtk.Window):
                 item = self._create_item_widget(entry, i)
                 self.list_box.pack_start(item, False, False, 0)
             total = len(self.store.entries)
-            self.count_label.set_text(f"{total} 条记录")
+            self.count_label.set_text(f"{total} items")
 
         self.list_box.show_all()
 
     def _create_item_widget(self, entry: ClipEntry, index: int) -> Gtk.Widget:
-        """创建单条记录的 Widget"""
-        # 外层事件盒 (可点击)
+        """Create widget for a single record"""
+        # Outer event box (clickable)
         event_box = Gtk.EventBox()
         event_box.connect("button-press-event",
                           lambda w, e, ent=entry: self._on_item_click(ent))
@@ -406,16 +406,16 @@ class ClipboardPopup(Gtk.Window):
         if entry.pinned:
             ctx.add_class("pinned")
 
-        # 保存引用用于键盘导航
+        # Save reference for keyboard navigation
         item_box._entry = entry
         item_box._index = index
 
-        # ── 左侧内容 ──
+        # ── Left Content ──
         content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         content_box.set_hexpand(True)
 
         if entry.content_type == "image":
-            # 图片预览
+            # Image preview
             img_path = self.store.get_image_path(entry)
             if img_path:
                 try:
@@ -436,7 +436,7 @@ class ClipboardPopup(Gtk.Window):
                 label.set_halign(Gtk.Align.START)
                 content_box.pack_start(label, False, False, 0)
         else:
-            # 文本预览 (最多 3 行)
+            # Text preview (max 3 lines)
             preview_text = entry.content[:200]
             lines = preview_text.split("\n")[:3]
             display_text = "\n".join(lines)
@@ -454,7 +454,7 @@ class ClipboardPopup(Gtk.Window):
             label.set_ellipsize(Pango.EllipsizeMode.END)
             content_box.pack_start(label, False, False, 0)
 
-        # 时间标签
+        # Time label
         time_str = self._format_time(entry.timestamp)
         meta = Gtk.Label(label=time_str)
         meta.get_style_context().add_class("clip-meta")
@@ -463,24 +463,24 @@ class ClipboardPopup(Gtk.Window):
 
         item_box.pack_start(content_box, True, True, 0)
 
-        # ── 右侧操作按钮 ──
+        # ── Right Action Buttons ──
         btn_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         btn_box.set_valign(Gtk.Align.CENTER)
 
-        # 置顶按钮
+        # Pin button
         pin_btn = Gtk.Button(label="📌")
         pin_btn.get_style_context().add_class("clip-action-btn")
         if entry.pinned:
             pin_btn.get_style_context().add_class("clip-pin-active")
-        pin_btn.set_tooltip_text("置顶" if not entry.pinned else "取消置顶")
+        pin_btn.set_tooltip_text("Pin" if not entry.pinned else "Unpin")
         pin_btn.connect("clicked",
                         lambda w, eid=entry.id: self._on_pin(eid))
         btn_box.pack_start(pin_btn, False, False, 0)
 
-        # 删除按钮
+        # Delete button
         del_btn = Gtk.Button(label="✕")
         del_btn.get_style_context().add_class("clip-action-btn")
-        del_btn.set_tooltip_text("删除")
+        del_btn.set_tooltip_text("Delete")
         del_btn.connect("clicked",
                         lambda w, eid=entry.id: self._on_delete(eid))
         btn_box.pack_start(del_btn, False, False, 0)
@@ -490,15 +490,15 @@ class ClipboardPopup(Gtk.Window):
         event_box.add(item_box)
         return event_box
 
-    # ── 事件处理 ──────────────────────────────────────────────
+    # ── Event Handling ────────────────────────────────────────────
 
     def _on_item_click(self, entry: ClipEntry):
-        """点击条目 → 粘贴"""
-        self._pasting = True  # 标记粘贴中, 阻止 focus-out 隐藏
+        """Click item → Paste"""
+        self._pasting = True  # Mark pasting, prevent focus-out hiding
         if self.on_paste:
             self.on_paste(entry)
         self.hide()
-        # 粘贴完成后重置标志
+        # Reset flag after paste is complete
         GLib.timeout_add(100, self._reset_pasting)
 
     def _on_pin(self, entry_id: str):
@@ -521,10 +521,10 @@ class ClipboardPopup(Gtk.Window):
         self._refresh_list(query)
 
     def _on_focus_out(self, widget, event):
-        """失焦隐藏"""
+        """Hide on focus-out"""
         if self._pasting:
-            return False  # 粘贴中不隐藏
-        # 延迟一点, 避免点击按钮时误触
+            return False  # Do not hide while pasting
+        # Delay slightly to avoid accidental trigger when clicking buttons
         GLib.timeout_add(100, self._check_focus)
         return False
 
@@ -538,7 +538,7 @@ class ClipboardPopup(Gtk.Window):
         return False
 
     def _on_key_press(self, widget, event):
-        """键盘导航"""
+        """Keyboard navigation"""
         key = event.keyval
 
         if key == Gdk.KEY_Escape:
@@ -561,7 +561,7 @@ class ClipboardPopup(Gtk.Window):
         return False
 
     def _move_selection(self, delta: int):
-        """移动键盘选中项"""
+        """Move keyboard selection"""
         if not self._visible_entries:
             return
 
@@ -572,15 +572,15 @@ class ClipboardPopup(Gtk.Window):
 
         self._selected_index = new
 
-        # 更新视觉高亮
+        # Update visual highlight
         children = self.list_box.get_children()
         for i, child in enumerate(children):
-            # child 是 EventBox, 内部是 item_box
+            # child is EventBox, item_box inside
             inner = child.get_children()[0] if isinstance(child, Gtk.EventBox) else child
             ctx = inner.get_style_context()
             if i == new:
                 ctx.add_class("selected")
-                # 滚动到可见区域
+                # Scroll to visible area
                 adj = self.list_box.get_parent().get_vadjustment()
                 alloc = child.get_allocation()
                 if alloc.y + alloc.height > adj.get_value() + adj.get_page_size():
@@ -590,26 +590,26 @@ class ClipboardPopup(Gtk.Window):
             else:
                 ctx.remove_class("selected")
 
-    # ── 工具方法 ──────────────────────────────────────────────
+    # ── Utility Methods ───────────────────────────────────────────
 
     @staticmethod
     def _format_time(ts: float) -> str:
-        """格式化时间为相对描述"""
+        """Format time as relative description"""
         diff = time.time() - ts
         if diff < 60:
-            return "刚刚"
+            return "Just now"
         elif diff < 3600:
-            return f"{int(diff // 60)} 分钟前"
+            return f"{int(diff // 60)} minutes ago"
         elif diff < 86400:
-            return f"{int(diff // 3600)} 小时前"
+            return f"{int(diff // 3600)} hours ago"
         elif diff < 604800:
-            return f"{int(diff // 86400)} 天前"
+            return f"{int(diff // 86400)} days ago"
         else:
             import datetime
             return datetime.datetime.fromtimestamp(ts).strftime("%m-%d %H:%M")
 
     def refresh(self):
-        """外部调用: 刷新列表 (新条目添加时)"""
+        """External call: refresh list (when new items added)"""
         if self.get_visible():
             query = self.search_entry.get_text()
             self._refresh_list(query)

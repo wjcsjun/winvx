@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-main.py — WinVX 入口
-Linux 上的 Windows 11 Win+V 剪贴板管理器
+main.py — WinVX Entry Point
+Windows 11-style Win+V Clipboard Manager for Linux
 
-用法:
-    python3 main.py              # 启动守护进程
-    python3 main.py --toggle     # 切换弹窗 (发信号给已运行的实例)
-    python3 main.py --max 50     # 设置最大记录数
-    python3 main.py --bind       # 自动注册 Super+V 到系统快捷键
+Usage:
+    python3 main.py              # Start daemon
+    python3 main.py --toggle     # Toggle popup (signal running instance)
+    python3 main.py --max 50     # Set max record count
+    python3 main.py --bind       # Auto-register Super+V to system hotkeys
 """
 
 import os
 
-# Wayland: 强制 GTK 使用 XWayland 后端, 使 window.move() 可用
-# (GNOME Wayland 完全忽略客户端窗口定位请求)
-# wl-copy/wl-paste/evdev 是子进程, 不受 GDK 后端影响
+# Wayland: Force GTK to use XWayland backend to make window.move() work
+# (GNOME Wayland completely ignores client-side window positioning requests)
+# wl-copy/wl-paste/evdev are subprocesses, unaffected by GDK backend
 if os.environ.get("XDG_SESSION_TYPE") == "wayland":
     os.environ.setdefault("GDK_BACKEND", "x11")
 
@@ -40,13 +40,13 @@ from clipboard_ui import ClipboardPopup
 from session_helper import is_wayland, is_x11, get_session_type, has_ydotool
 
 
-# ── 单实例控制 ────────────────────────────────────────────────
+# ── Single Instance Control ───────────────────────────────────
 
 SOCKET_PATH = "/tmp/winvx.sock"
 
 
 def is_running() -> bool:
-    """检查是否已有实例在运行"""
+    """Check if an instance is already running"""
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.connect(SOCKET_PATH)
@@ -57,7 +57,7 @@ def is_running() -> bool:
 
 
 def send_toggle():
-    """向已运行实例发送 toggle 信号"""
+    """Send toggle signal to a running instance"""
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.connect(SOCKET_PATH)
@@ -68,14 +68,14 @@ def send_toggle():
         return False
 
 
-# ── X11 全局快捷键 (纯 ctypes) ────────────────────────────────
+# ── X11 Global Hotkey (Pure ctypes) ───────────────────────────
 
 class X11HotkeyListener:
-    """使用 ctypes 直接调用 X11 API 注册全局快捷键
+    """Use ctypes to directly call X11 API to register global hotkeys
     
-    注意: 如果桌面环境 (GNOME/KDE) 已经抢占了 Super 键,
-    XGrabKey 可能无法拦截到 Super+V。此时需要通过
-    桌面环境自己的快捷键设置来绑定 --toggle 命令。
+    Note: If the desktop environment (GNOME/KDE) has already claimed the Super key,
+    XGrabKey may fail to intercept Super+V. In this case, you need to use
+    the desktop environment's own hotkey settings to bind the --toggle command.
     """
 
     def __init__(self, callback):
@@ -111,19 +111,19 @@ class X11HotkeyListener:
         self.root = self.xlib.XDefaultRootWindow(self.display)
 
     def start(self):
-        """开始监听全局快捷键 (在后台线程)"""
-        # 获取 'v' 的 keycode
+        """Start listening for global hotkeys (in background thread)"""
+        # Get keycode for 'v'
         keycode = self.xlib.XKeysymToKeycode(self.display, 0x0076)  # XK_v = 0x76
         if not keycode:
-            print("[WinVX] ✗ 无法获取 'v' 的 keycode")
+            print("[WinVX] ✗ Failed to get keycode for 'v'")
             return False
 
-        # Mod4Mask = Super 键 (通常是 1<<6 = 64)
+        # Mod4Mask = Super key (usually 1<<6 = 64)
         Mod4Mask = (1 << 6)
         LockMask = (1 << 1)    # CapsLock
         Mod2Mask = (1 << 4)    # NumLock
 
-        # 注册 XGrabKey (需要处理 CapsLock/NumLock 组合)
+        # Register XGrabKey (need to handle CapsLock/NumLock combinations)
         modifiers_combos = [
             Mod4Mask,
             Mod4Mask | LockMask,
@@ -142,7 +142,7 @@ class X11HotkeyListener:
                 1,      # GrabModeAsync
                 1,      # GrabModeAsync
             )
-            if result == 0:  # BadAccess 等错误
+            if result == 0:  # BadAccess and other errors
                 pass
             else:
                 grabbed = True
@@ -158,14 +158,14 @@ class X11HotkeyListener:
         return True
 
     def _listen_loop(self):
-        """X11 事件循环 (在后台线程运行)"""
-        # XEvent 结构足够大以容纳所有事件类型
+        """X11 event loop (runs in background thread)"""
+        # XEvent structure large enough to hold all event types
         event_buf = ctypes.create_string_buffer(256)
 
         while self._running:
             try:
                 self.xlib.XNextEvent(self.display, event_buf)
-                # event.type 是结构体第一个字段 (int)
+                # event.type is the first field of the structure (int)
                 event_type = ctypes.c_int.from_buffer_copy(event_buf).value
                 if event_type == 2:  # KeyPress
                     GLib.idle_add(self.callback)
@@ -177,13 +177,13 @@ class X11HotkeyListener:
 
 
 class WinVXApp:
-    """WinVX 应用主类"""
+    """WinVX Main Application Class"""
 
     def __init__(self, max_items: int = 25):
         self.store = ClipStore(max_items=max_items)
         self._session_type = get_session_type()
 
-        # 先创建 UI, 再创建 Monitor (避免回调时 popup 还不存在)
+        # Create UI first, then Monitor (to ensure popup exists before callbacks)
         self.popup = ClipboardPopup(self.store, on_paste=self._on_paste,
                                     wayland=is_wayland())
         self.monitor = ClipboardMonitor(self.store, on_change=self._on_clip_change,
@@ -193,63 +193,63 @@ class WinVXApp:
         self._setup_socket_server()
         self._setup_hotkey()
 
-    # ── 全局快捷键 ────────────────────────────────────────────
+    # ── Global Hotkeys ────────────────────────────────────────────
 
     def _setup_hotkey(self):
-        """绑定 Super+V 全局快捷键"""
+        """Bind Super+V global hotkey"""
         if is_wayland():
-            # Wayland: 无法 XGrabKey, 尝试自动注册 gsettings 快捷键
-            print("[WinVX] 🌊 Wayland 模式 — 使用系统快捷键绑定")
+            # Wayland: Cannot XGrabKey, try auto-registering gsettings hotkey
+            print("[WinVX] 🌊 Wayland Mode — Using system hotkey binding")
             self._setup_hotkey_wayland()
         else:
-            # X11: 原有 XGrabKey 逻辑
+            # X11: Existing XGrabKey logic
             self._setup_hotkey_x11()
 
     def _setup_hotkey_x11(self):
-        """X11: 通过 XGrabKey 绑定全局快捷键"""
+        """X11: Bind global hotkey via XGrabKey"""
         try:
             self._hotkey_listener = X11HotkeyListener(self._on_hotkey)
             if self._hotkey_listener.start():
-                print("[WinVX] ✓ 全局快捷键 Super+V 已绑定 (X11 XGrabKey)")
+                print("[WinVX] ✓ Global Hotkey Super+V Bound (X11 XGrabKey)")
             else:
-                print("[WinVX] ⚠ XGrabKey 绑定失败 (可能被桌面环境占用)")
+                print("[WinVX] ⚠ XGrabKey Binding Failed (likely claimed by desktop environment)")
                 self._print_manual_setup()
         except Exception as e:
-            print(f"[WinVX] ⚠ 快捷键绑定失败: {e}")
+            print(f"[WinVX] ⚠ Hotkey Binding Failed: {e}")
             self._print_manual_setup()
 
     def _setup_hotkey_wayland(self):
-        """Wayland: 尝试自动注册 GNOME 自定义快捷键"""
+        """Wayland: Try auto-registering GNOME custom hotkey"""
         try:
             if auto_bind_shortcut():
-                print("[WinVX] ✓ 已自动注册 Super+V 快捷键")
+                print("[WinVX] ✓ Auto-registered Super+V hotkey")
             else:
                 self._print_manual_setup()
         except Exception as e:
-            print(f"[WinVX] ⚠ 自动绑定快捷键失败: {e}")
+            print(f"[WinVX] ⚠ Auto-binding hotkey failed: {e}")
             self._print_manual_setup()
 
     def _on_hotkey(self):
-        """快捷键回调 (在主线程)"""
+        """Hotkey callback (in main thread)"""
         self.popup.toggle()
-        return False  # GLib.idle_add 不重复
+        return False  # GLib.idle_add does not repeat
 
     def _print_manual_setup(self):
         me = os.path.abspath(__file__)
         print("[WinVX]")
-        print("[WinVX] 请通过以下方式之一设置快捷键:")
+        print("[WinVX] Please set hotkey using one of these methods:")
         print("[WinVX]")
-        print(f"[WinVX]   方法1: python3 {me} --bind")
-        print(f"[WinVX]          (自动注册到 GNOME/KDE 快捷键)")
+        print(f"[WinVX]   Method 1: python3 {me} --bind")
+        print(f"[WinVX]             (Auto-register to GNOME/KDE hotkeys)")
         print("[WinVX]")
-        print(f"[WinVX]   方法2: 手动在系统设置 → 键盘 → 自定义快捷键:")
-        print(f"[WinVX]          命令: python3 {me} --toggle")
-        print(f"[WinVX]          快捷键: Super+V")
+        print(f"[WinVX]   Method 2: Manual setup in System Settings → Keyboard → Shortcuts:")
+        print(f"[WinVX]             Command: python3 {me} --toggle")
+        print(f"[WinVX]             Hotkey: Super+V")
 
-    # ── Socket 服务 (单实例通信) ───────────────────────────────
+    # ── Socket Server (Single Instance Communication) ──────────
 
     def _setup_socket_server(self):
-        """启动 Unix Socket 服务, 接收 toggle 命令"""
+        """Start Unix Socket service to receive toggle commands"""
         if os.path.exists(SOCKET_PATH):
             os.unlink(SOCKET_PATH)
 
@@ -265,7 +265,7 @@ class WinVXApp:
         )
 
     def _on_socket_ready(self, fd, condition):
-        """收到 socket 连接"""
+        """Received socket connection"""
         try:
             conn, _ = self._server_sock.accept()
             data = conn.recv(1024).decode("utf-8", errors="ignore")
@@ -276,42 +276,42 @@ class WinVXApp:
             pass
         return True
 
-    # ── 回调 ──────────────────────────────────────────────────
+    # ── Callbacks ─────────────────────────────────────────────────
 
     def _on_clip_change(self, entry):
-        """新剪贴板内容回调"""
+        """New clipboard content callback"""
         GLib.idle_add(self.popup.refresh)
 
     def _on_paste(self, entry):
-        """用户点击粘贴 — 将内容设置到剪贴板"""
-        self._pending_paste_entry = entry  # 保存条目, 供 _simulate_paste 使用
-        self.monitor.paste_entry(entry)     # 设置剪贴板 (备用)
-        # hide() 在 _on_item_click 中调用, 焦点回到目标窗口后模拟粘贴
-        # Wayland 下需要更长延迟, 等待窗口管理器将焦点转回目标应用
+        """User clicked paste — Set content to clipboard"""
+        self._pending_paste_entry = entry  # Save entry for _simulate_paste
+        self.monitor.paste_entry(entry)     # Set clipboard (fallback)
+        # hide() is called in _on_item_click, simulate paste after focus returns to target window
+        # Wayland needs longer delay for WM to switch focus back to target app
         delay = 200 if is_wayland() else 30
         GLib.timeout_add(delay, self._simulate_paste)
 
     def _simulate_paste(self):
-        """模拟粘贴"""
+        """Simulate paste"""
         if is_wayland():
             return self._simulate_paste_wayland()
         else:
             return self._simulate_paste_x11()
 
     def _simulate_paste_wayland(self):
-        """Wayland: 使用 python-evdev 通过 uinput 模拟 Ctrl+V"""
-        # 方式 1: python-evdev (直接 uinput, 最可靠)
+        """Wayland: Simulate Ctrl+V using python-evdev via uinput"""
+        # Method 1: python-evdev (direct uinput, most reliable)
         try:
             from evdev import UInput, ecodes
             import time as _time
 
-            # 缓存 UInput 设备, 避免每次创建/销毁
+            # Cache UInput device to avoid repeated creation/destruction
             if not hasattr(self, '_uinput'):
                 self._uinput = UInput(
                     {ecodes.EV_KEY: [ecodes.KEY_LEFTCTRL, ecodes.KEY_V]},
                     name='winvx-paste'
                 )
-                _time.sleep(0.05)  # 等待内核注册设备
+                _time.sleep(0.05)  # Wait for kernel to register device
 
             ui = self._uinput
             ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 1)
@@ -321,16 +321,16 @@ class WinVXApp:
             ui.write(ecodes.EV_KEY, ecodes.KEY_V, 0)
             ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 0)
             ui.syn()
-            return False  # 成功
+            return False  # Success
         except ImportError:
-            pass  # evdev 未安装
+            pass  # evdev not installed
         except PermissionError:
-            print("[WinVX] ⚠ /dev/uinput 权限不足")
-            print("[WinVX]   请运行: sudo usermod -aG input $USER")
+            print("[WinVX] ⚠ Insufficient permission for /dev/uinput")
+            print("[WinVX]   Please run: sudo usermod -aG input $USER")
         except Exception as e:
-            print(f"[WinVX] evdev 异常: {e}")
+            print(f"[WinVX] evdev exception: {e}")
 
-        # 方式 2: xdotool (通过 XWayland, 仅对 X11 应用有效)
+        # Method 2: xdotool (via XWayland, only works for X11 apps)
         try:
             subprocess.run(
                 ["xdotool", "key", "--clearmodifiers", "--delay", "0", "ctrl+v"],
@@ -341,18 +341,18 @@ class WinVXApp:
 
         if not getattr(self, '_paste_warned', False):
             self._paste_warned = True
-            print("[WinVX] ⚠ 自动粘贴可能不可用")
-            print("[WinVX]   内容已复制到剪贴板, 请手动 Ctrl+V")
+            print("[WinVX] ⚠ Auto-paste might be unavailable")
+            print("[WinVX]   Content copied to clipboard, please Ctrl+V manually")
         return False
 
     def _simulate_paste_x11(self):
-        """X11: 使用 XTest 直接发送 Ctrl+V 按键事件 (零延迟, 无进程开销)"""
+        """X11: Use XTest to send Ctrl+V key events directly (zero delay, no proc overhead)"""
         try:
             if not hasattr(self, '_xtst'):
                 self._init_xtest()
 
             d = self._xtest_display
-            # Ctrl 按下 → v 按下 → v 释放 → Ctrl 释放
+            # Ctrl press → v press → v release → Ctrl release
             self._xtst.XTestFakeKeyEvent(d, self._ctrl_keycode, True, 0)
             self._xtst.XTestFakeKeyEvent(d, self._v_keycode, True, 0)
             self._xtst.XTestFakeKeyEvent(d, self._v_keycode, False, 0)
@@ -360,7 +360,7 @@ class WinVXApp:
             self._xlib_paste.XFlush(d)
         except Exception as e:
             # fallback: xdotool
-            print(f"[WinVX] XTest 失败, 回退 xdotool: {e}")
+            print(f"[WinVX] XTest failed, falling back to xdotool: {e}")
             try:
                 subprocess.Popen(
                     ["xdotool", "key", "--delay", "0", "ctrl+v"],
@@ -372,7 +372,7 @@ class WinVXApp:
         return False
 
     def _init_xtest(self):
-        """初始化 XTest 扩展 (只调用一次)"""
+        """Initialize XTest extension (called only once)"""
         import ctypes, ctypes.util
 
         x11_path = ctypes.util.find_library("X11")
@@ -381,7 +381,7 @@ class WinVXApp:
         self._xlib_paste = ctypes.cdll.LoadLibrary(x11_path)
         self._xtst = ctypes.cdll.LoadLibrary(xtst_path)
 
-        # 设置函数签名
+        # Set function signatures
         self._xlib_paste.XOpenDisplay.restype = ctypes.c_void_p
         self._xlib_paste.XKeysymToKeycode.restype = ctypes.c_int
         self._xlib_paste.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
@@ -401,17 +401,17 @@ class WinVXApp:
         self._v_keycode = self._xlib_paste.XKeysymToKeycode(
             self._xtest_display, 0x0076)  # XK_v
 
-    # ── 运行 ──────────────────────────────────────────────────
+    # ── Run ───────────────────────────────────────────────────
 
     def run(self):
         session = get_session_type()
-        print(f"[WinVX] 🚀 剪贴板管理器已启动 ({session} 会话)")
-        print("[WinVX] 按 Super+V 打开剪贴板历史")
-        print(f"[WinVX] 或运行: python3 {os.path.abspath(__file__)} --toggle")
+        print(f"[WinVX] 🚀 Clipboard Manager Started ({session} session)")
+        print("[WinVX] Press Super+V to open clipboard history")
+        print(f"[WinVX] Or run: python3 {os.path.abspath(__file__)} --toggle")
         if is_wayland():
             if not has_ydotool():
-                print("[WinVX] ⚠ ydotool 未安装，粘贴功能将不可用")
-                print("[WinVX]   请安装: sudo apt install ydotool")
+                print("[WinVX] ⚠ ydotool not installed, paste function will be unavailable")
+                print("[WinVX]   Please install: sudo apt install ydotool")
 
         signal.signal(signal.SIGINT, lambda *a: self.quit())
         signal.signal(signal.SIGTERM, lambda *a: self.quit())
@@ -424,7 +424,7 @@ class WinVXApp:
             self.quit()
 
     def quit(self):
-        print("\n[WinVX] 正在退出...")
+        print("\n[WinVX] Exiting...")
         if self._hotkey_listener:
             self._hotkey_listener.stop()
         if hasattr(self, 'monitor'):
@@ -434,18 +434,18 @@ class WinVXApp:
         Gtk.main_quit()
 
 
-# ── 自动绑定快捷键到桌面环境 ──────────────────────────────────
+# ── Auto-bind Hotkeys to Desktop Environment ─────────────────
 
 def auto_bind_shortcut():
-    """尝试自动注册 Super+V 快捷键到 GNOME/KDE"""
+    """Try auto-registering Super+V hotkey to GNOME/KDE"""
     me = os.path.abspath(os.path.join(os.path.dirname(__file__), "main.py"))
     toggle_cmd = f"python3 {me} --toggle"
     desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
     if "gnome" in desktop or "ubuntu" in desktop or "unity" in desktop:
-        # GNOME: 使用 gsettings 自定义快捷键
+        # GNOME: Use gsettings for custom hotkey
         try:
-            # 读取已有的自定义快捷键
+            # Read existing custom keybindings
             result = subprocess.run(
                 ["gsettings", "get", "org.gnome.settings-daemon.plugins.media-keys",
                  "custom-keybindings"],
@@ -455,11 +455,11 @@ def auto_bind_shortcut():
 
             path = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/winvx/"
 
-            # 检查是否已注册
+            # Check if already registered
             if "winvx" in existing:
-                print("[WinVX] 快捷键已注册, 更新中...")
+                print("[WinVX] Hotkey already registered, updating...")
             else:
-                # 添加到列表
+                # Add to list
                 if existing == "@as []" or existing == "[]":
                     new_list = f"['{path}']"
                 else:
@@ -470,73 +470,73 @@ def auto_bind_shortcut():
                     "custom-keybindings", new_list
                 ], check=True)
 
-            # 设置快捷键属性
+            # Set hotkey properties
             base = "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding"
             schema_path = path
             subprocess.run(["gsettings", "set", f"{base}:{schema_path}", "name", "WinVX Clipboard"], check=True)
             subprocess.run(["gsettings", "set", f"{base}:{schema_path}", "command", toggle_cmd], check=True)
             subprocess.run(["gsettings", "set", f"{base}:{schema_path}", "binding", "<Super>v"], check=True)
 
-            print("[WinVX] ✓ 已注册 GNOME 快捷键: Super+V")
-            print(f"[WinVX]   命令: {toggle_cmd}")
+            print("[WinVX] ✓ Registered GNOME Hotkey: Super+V")
+            print(f"[WinVX]   Command: {toggle_cmd}")
             return True
         except Exception as e:
-            print(f"[WinVX] ✗ GNOME 快捷键注册失败: {e}")
+            print(f"[WinVX] ✗ GNOME Hotkey registration failed: {e}")
             return False
 
     elif "kde" in desktop or "plasma" in desktop:
-        # KDE: 使用 kglobalaccel 或 kwriteconfig
+        # KDE: Use kglobalaccel or kwriteconfig
         try:
             rc_path = os.path.expanduser("~/.config/kglobalshortcutsrc")
-            # 写入 khotkeys 配置
+            # Write khotkeys config
             subprocess.run([
                 "kwriteconfig5", "--file", "kglobalshortcutsrc",
                 "--group", "winvx.desktop",
                 "--key", "_launch", f"{toggle_cmd},none,WinVX Clipboard"
             ], check=True)
-            print("[WinVX] ✓ 已写入 KDE 配置, 请手动设置快捷键")
-            print(f"[WinVX]   系统设置 → 快捷键 → 自定义 → WinVX Clipboard → Super+V")
+            print("[WinVX] ✓ KDE config written, please set hotkey manually")
+            print(f"[WinVX]   System Settings → Shortcuts → Custom → WinVX Clipboard → Super+V")
             return True
         except Exception as e:
-            print(f"[WinVX] ✗ KDE 配置失败: {e}")
+            print(f"[WinVX] ✗ KDE configuration failed: {e}")
             return False
 
     else:
-        # XFCE, Cinnamon 等: 提示手动设置
-        print(f"[WinVX] 未检测到 GNOME/KDE (当前: {desktop})")
-        print(f"[WinVX] 请手动在系统设置中添加自定义快捷键:")
-        print(f"[WinVX]   命令: {toggle_cmd}")
-        print(f"[WinVX]   快捷键: Super+V")
+        # XFCE, Cinnamon, etc.: Prompt for manual setup
+        print(f"[WinVX] GNOME/KDE not detected (Current: {desktop})")
+        print(f"[WinVX] Please manually add a custom hotkey in system settings:")
+        print(f"[WinVX]   Command: {toggle_cmd}")
+        print(f"[WinVX]   Hotkey: Super+V")
         return False
 
 
-# ── CLI 入口 ──────────────────────────────────────────────────
+# ── CLI Entry Point ───────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="WinVX — Linux 剪贴板管理器")
+    parser = argparse.ArgumentParser(description="WinVX — Linux Clipboard Manager")
     parser.add_argument("--toggle", action="store_true",
-                        help="切换弹窗显示 (发信号给已运行的实例)")
+                        help="Toggle popup display (signal running instance)")
     parser.add_argument("--bind", action="store_true",
-                        help="自动注册 Super+V 到系统快捷键")
+                        help="Auto-register Super+V to system hotkeys")
     parser.add_argument("--max", type=int, default=25,
-                        help="最大历史记录数 (默认 25)")
+                        help="Max history items (default 25)")
     args = parser.parse_args()
 
-    # --bind: 注册系统快捷键
+    # --bind: Register system hotkey
     if args.bind:
         auto_bind_shortcut()
         sys.exit(0)
 
-    # --toggle: 发送信号给已运行的实例
+    # --toggle: Send signal to running instance
     if args.toggle:
         if send_toggle():
             sys.exit(0)
         else:
-            print("[WinVX] 没有运行中的实例, 正在启动...")
+            print("[WinVX] No instance running, starting...")
 
-    # 检查单实例
+    # Check for single instance
     if is_running():
-        print("[WinVX] 已有实例在运行, 发送 toggle 信号")
+        print("[WinVX] Already running, sending toggle signal")
         send_toggle()
         sys.exit(0)
 
