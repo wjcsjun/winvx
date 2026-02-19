@@ -169,13 +169,15 @@ class ClipboardPopup(Gtk.Window):
     WINDOW_WIDTH = 380
     WINDOW_HEIGHT = 520
 
-    def __init__(self, store: ClipStore, on_paste: Optional[Callable] = None):
+    def __init__(self, store: ClipStore, on_paste: Optional[Callable] = None,
+                 wayland: bool = False):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
         self.store = store
         self.on_paste = on_paste
         self._selected_index = -1
         self._visible_entries: list[ClipEntry] = []
         self._pasting = False  # 粘贴中标志, 避免 focus-out 干扰
+        self._wayland = wayland
 
         self._setup_window()
         self._apply_css()
@@ -316,25 +318,33 @@ class ClipboardPopup(Gtk.Window):
             self.popup()
 
     def popup(self):
-        """在屏幕中央弹出窗口并抢夺焦点"""
+        """弹出窗口, 跟随鼠标位置"""
         self._refresh_list()
         self.search_entry.set_text("")
         self._selected_index = -1
 
-        # 定位: 屏幕中央偏下
+        # 获取鼠标位置并定位弹窗
         display = Gdk.Display.get_default()
+        seat = display.get_default_seat()
+        pointer = seat.get_pointer()
+        _, mx, my = pointer.get_position()
+
         monitor = display.get_primary_monitor() or display.get_monitor(0)
         geom = monitor.get_geometry()
 
-        x = geom.x + (geom.width - self.WINDOW_WIDTH) // 2
-        y = geom.y + (geom.height - self.WINDOW_HEIGHT) // 2 + 60
-
+        # 弹窗略低于鼠标位置, 水平居中于鼠标
+        x = max(geom.x, min(mx - self.WINDOW_WIDTH // 2,
+                            geom.x + geom.width - self.WINDOW_WIDTH))
+        y = max(geom.y, min(my + 20,
+                            geom.y + geom.height - self.WINDOW_HEIGHT))
         self.move(x, y)
+
         self.show_all()
 
         # 强制抢夺焦点 (多种方式确保成功)
         self.present_with_time(Gdk.CURRENT_TIME)
-        self.get_window().focus(Gdk.CURRENT_TIME)
+        if self.get_window():
+            self.get_window().focus(Gdk.CURRENT_TIME)
         self.search_entry.grab_focus()
 
         # 延迟再次抢焦点 (有些 WM 需要等一帧)

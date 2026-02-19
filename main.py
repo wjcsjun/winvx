@@ -10,6 +10,14 @@ Linux 上的 Windows 11 Win+V 剪贴板管理器
     python3 main.py --bind       # 自动注册 Super+V 到系统快捷键
 """
 
+import os
+
+# Wayland: 强制 GTK 使用 XWayland 后端, 使 window.move() 可用
+# (GNOME Wayland 完全忽略客户端窗口定位请求)
+# wl-copy/wl-paste/evdev 是子进程, 不受 GDK 后端影响
+if os.environ.get("XDG_SESSION_TYPE") == "wayland":
+    os.environ.setdefault("GDK_BACKEND", "x11")
+
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
@@ -29,6 +37,7 @@ from pathlib import Path
 from clip_store import ClipStore
 from clipboard_monitor import ClipboardMonitor
 from clipboard_ui import ClipboardPopup
+from session_helper import is_wayland, is_x11, get_session_type, has_ydotool
 
 
 # ── 单实例控制 ────────────────────────────────────────────────
@@ -172,10 +181,13 @@ class WinVXApp:
 
     def __init__(self, max_items: int = 25):
         self.store = ClipStore(max_items=max_items)
+        self._session_type = get_session_type()
 
         # 先创建 UI, 再创建 Monitor (避免回调时 popup 还不存在)
-        self.popup = ClipboardPopup(self.store, on_paste=self._on_paste)
-        self.monitor = ClipboardMonitor(self.store, on_change=self._on_clip_change)
+        self.popup = ClipboardPopup(self.store, on_paste=self._on_paste,
+                                    wayland=is_wayland())
+        self.monitor = ClipboardMonitor(self.store, on_change=self._on_clip_change,
+                                        wayland=is_wayland())
 
         self._hotkey_listener = None
         self._setup_socket_server()
@@ -184,7 +196,17 @@ class WinVXApp:
     # ── 全局快捷键 ────────────────────────────────────────────
 
     def _setup_hotkey(self):
-        """绑定 Super+V 全局快捷键 (通过 X11 XGrabKey)"""
+        """绑定 Super+V 全局快捷键"""
+        if is_wayland():
+            # Wayland: 无法 XGrabKey, 尝试自动注册 gsettings 快捷键
+            print("[WinVX] 🌊 Wayland 模式 — 使用系统快捷键绑定")
+            self._setup_hotkey_wayland()
+        else:
+            # X11: 原有 XGrabKey 逻辑
+            self._setup_hotkey_x11()
+
+    def _setup_hotkey_x11(self):
+        """X11: 通过 XGrabKey 绑定全局快捷键"""
         try:
             self._hotkey_listener = X11HotkeyListener(self._on_hotkey)
             if self._hotkey_listener.start():
@@ -194,6 +216,17 @@ class WinVXApp:
                 self._print_manual_setup()
         except Exception as e:
             print(f"[WinVX] ⚠ 快捷键绑定失败: {e}")
+            self._print_manual_setup()
+
+    def _setup_hotkey_wayland(self):
+        """Wayland: 尝试自动注册 GNOME 自定义快捷键"""
+        try:
+            if auto_bind_shortcut():
+                print("[WinVX] ✓ 已自动注册 Super+V 快捷键")
+            else:
+                self._print_manual_setup()
+        except Exception as e:
+            print(f"[WinVX] ⚠ 自动绑定快捷键失败: {e}")
             self._print_manual_setup()
 
     def _on_hotkey(self):
@@ -251,12 +284,69 @@ class WinVXApp:
 
     def _on_paste(self, entry):
         """用户点击粘贴 — 将内容设置到剪贴板"""
-        self.monitor.paste_entry(entry)
-        # hide() 在 _on_item_click 中调用, 焦点回到目标窗口后模拟 Ctrl+V
-        GLib.timeout_add(30, self._simulate_paste)
+        self._pending_paste_entry = entry  # 保存条目, 供 _simulate_paste 使用
+        self.monitor.paste_entry(entry)     # 设置剪贴板 (备用)
+        # hide() 在 _on_item_click 中调用, 焦点回到目标窗口后模拟粘贴
+        # Wayland 下需要更长延迟, 等待窗口管理器将焦点转回目标应用
+        delay = 200 if is_wayland() else 30
+        GLib.timeout_add(delay, self._simulate_paste)
 
     def _simulate_paste(self):
-        """使用 XTest 直接发送 Ctrl+V 按键事件 (零延迟, 无进程开销)"""
+        """模拟粘贴"""
+        if is_wayland():
+            return self._simulate_paste_wayland()
+        else:
+            return self._simulate_paste_x11()
+
+    def _simulate_paste_wayland(self):
+        """Wayland: 使用 python-evdev 通过 uinput 模拟 Ctrl+V"""
+        # 方式 1: python-evdev (直接 uinput, 最可靠)
+        try:
+            from evdev import UInput, ecodes
+            import time as _time
+
+            # 缓存 UInput 设备, 避免每次创建/销毁
+            if not hasattr(self, '_uinput'):
+                self._uinput = UInput(
+                    {ecodes.EV_KEY: [ecodes.KEY_LEFTCTRL, ecodes.KEY_V]},
+                    name='winvx-paste'
+                )
+                _time.sleep(0.05)  # 等待内核注册设备
+
+            ui = self._uinput
+            ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 1)
+            ui.write(ecodes.EV_KEY, ecodes.KEY_V, 1)
+            ui.syn()
+            _time.sleep(0.01)
+            ui.write(ecodes.EV_KEY, ecodes.KEY_V, 0)
+            ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 0)
+            ui.syn()
+            return False  # 成功
+        except ImportError:
+            pass  # evdev 未安装
+        except PermissionError:
+            print("[WinVX] ⚠ /dev/uinput 权限不足")
+            print("[WinVX]   请运行: sudo usermod -aG input $USER")
+        except Exception as e:
+            print(f"[WinVX] evdev 异常: {e}")
+
+        # 方式 2: xdotool (通过 XWayland, 仅对 X11 应用有效)
+        try:
+            subprocess.run(
+                ["xdotool", "key", "--clearmodifiers", "--delay", "0", "ctrl+v"],
+                capture_output=True, timeout=3
+            )
+        except Exception:
+            pass
+
+        if not getattr(self, '_paste_warned', False):
+            self._paste_warned = True
+            print("[WinVX] ⚠ 自动粘贴可能不可用")
+            print("[WinVX]   内容已复制到剪贴板, 请手动 Ctrl+V")
+        return False
+
+    def _simulate_paste_x11(self):
+        """X11: 使用 XTest 直接发送 Ctrl+V 按键事件 (零延迟, 无进程开销)"""
         try:
             if not hasattr(self, '_xtst'):
                 self._init_xtest()
@@ -314,9 +404,14 @@ class WinVXApp:
     # ── 运行 ──────────────────────────────────────────────────
 
     def run(self):
-        print("[WinVX] 🚀 剪贴板管理器已启动")
+        session = get_session_type()
+        print(f"[WinVX] 🚀 剪贴板管理器已启动 ({session} 会话)")
         print("[WinVX] 按 Super+V 打开剪贴板历史")
         print(f"[WinVX] 或运行: python3 {os.path.abspath(__file__)} --toggle")
+        if is_wayland():
+            if not has_ydotool():
+                print("[WinVX] ⚠ ydotool 未安装，粘贴功能将不可用")
+                print("[WinVX]   请安装: sudo apt install ydotool")
 
         signal.signal(signal.SIGINT, lambda *a: self.quit())
         signal.signal(signal.SIGTERM, lambda *a: self.quit())
@@ -332,6 +427,8 @@ class WinVXApp:
         print("\n[WinVX] 正在退出...")
         if self._hotkey_listener:
             self._hotkey_listener.stop()
+        if hasattr(self, 'monitor'):
+            self.monitor.stop()
         if os.path.exists(SOCKET_PATH):
             os.unlink(SOCKET_PATH)
         Gtk.main_quit()
