@@ -19,7 +19,7 @@
 ## 🚀 Installation
 
 ### 1. Download .deb Package (Recommended)
-The easiest way to install WinVX on Debian-based systems (Ubuntu, Linux Mint, etc.) is using the `.deb` package. You can find it in the [GitHub Actions artifacts](https://github.com/wjcsjun/winvx/actions) or build it yourself:
+The easiest way to install WinVX on Debian-based systems (Ubuntu, Linux Mint, etc.) is using the `.deb` package. You can find it in the [GitHub Releases](https://github.com/wjcsjun/winvx/releases) or build it yourself:
 
 ```bash
 # Build the .deb package

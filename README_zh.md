@@ -19,7 +19,7 @@
 ## 🚀 安装指南
 
 ### 1. 下载 .deb 安装包 (推荐)
-在基于 Debian 的系统（如 Ubuntu, Linux Mint）上，最简单的安装方式是使用 `.deb` 包。你可以从 [GitHub Actions 产物](https://github.com/wjcsjun/winvx/actions) 中下载，或者自行构建：
+在基于 Debian 的系统（如 Ubuntu, Linux Mint）上，最简单的安装方式是使用 `.deb` 包。你可以从 [GitHub Releases](https://github.com/wjcsjun/winvx/releases) 中下载，或者自行构建：
 
 ```bash
 # 构建 .deb 包
