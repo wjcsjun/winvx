@@ -4,7 +4,6 @@
 
 **WinVX** 是一款 Linux 原生的剪贴板历史管理器，旨在复刻 **Windows 11 (Win+V)** 的使用体验。它拥有现代化的深色主题 UI，支持文本和图片，并且在 **X11** 和 **Wayland** 下都能完美运行。
 
-![WinVX Preview](https://github.com/wjcsjun/winvx/raw/main/preview.png) *(预览图占位)*
 
 ## ✨ 功能特性
 

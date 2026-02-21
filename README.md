@@ -4,7 +4,6 @@
 
 **WinVX** is a Linux-native clipboard history manager that replicates the **Windows 11 (Win+V)** experience. It features a sleek dark-themed UI, supports both text and images, and works seamlessly on both **X11** and **Wayland**.
 
-![WinVX Preview](https://github.com/wjcsjun/winvx/raw/main/preview.png) *(Placeholder for preview)*
 
 ## ✨ Features
 
